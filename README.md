@@ -1,4 +1,9 @@
 # ✅ Project Setup and Execution Guide
+### Demo Run of Project
+You can view the demo run of the project here:
+
+[Demo run of project](https://drive.google.com/file/d/12Uc_ahpmX0w5ACizFwojA_qTfWVkFNoD/view?usp=sharing)
+
 ## 🔧 Project Installation
 
 **1. Download & Extract Project**  
@@ -48,8 +53,7 @@ CELERY_RESULT_BACKEND="redis://localhost:6379/0"
 | Issue                               | Solution                                              |
 |-------------------------------------|-------------------------------------------------------|
 | Comedy/fake agents                  | Created serious medical agents                        |
-| Wrong attribute `tool=[]`           | Fixed to `tools=[]`                                   |
-| Excessive token use with multiple agents | Disabled nutrition/exercise agents temporarily |
+| tool not connect to agent           | agent runs through tools
 | No docs/comments                    | Added documentation                                   |
 
 ✅ **Active Agents:**

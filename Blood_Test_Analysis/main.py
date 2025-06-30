@@ -1,10 +1,21 @@
+import logging
+import logging
+
+# Adjust logging configuration
+logging.basicConfig(level=logging.INFO)  # This will suppress debug logs globally.
+
+# Set logging level for specific libraries (to suppress their debug logs)
+logging.getLogger("pymongo").setLevel(logging.WARNING)  # This will only log warnings and errors from pymongo
+logging.getLogger("httpx").setLevel(logging.WARNING)  # This will only log warnings and errors from httpx
+logging.getLogger("crewai").setLevel(logging.WARNING)  # If crewai is generating logs, set it to WARNING
+logging.getLogger("liteLLM").setLevel(logging.WARNING)
+
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from typing import Optional
 import os
 import uuid
 from datetime import datetime
-import logging
 import pdfplumber
 
 # CHANGED: switched from original blocking crew logic to a modular pipeline
@@ -18,7 +29,6 @@ app = FastAPI(title="Blood Test Report Analyser")
 # NEW: added logging for better tracing and debugging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
 
 # NEW FUNCTION:
 # This did not exist in the original code.
@@ -112,15 +122,14 @@ async def analyze_blood_report(
             inserted_id = None
             doctor_report += f"\n\nFailed to save report to MongoDB: {str(db_err)}"
 
-    # CHANGED: response now includes user_name and report_id for traceability
+    # Simplified response with essential information for Streamlit
     return JSONResponse(
         content={
             "status": "success",
             "user_name": user_name,
             "query": query,
             "analysis": doctor_report,
-            "file_processed": file.filename,
-            "report_id": inserted_id,
+            "report_id": inserted_id  # Including report_id in the response for Streamlit
         }
     )
 

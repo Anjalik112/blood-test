@@ -1,140 +1,180 @@
 import logging
-import logging
 
 # Adjust logging configuration
-logging.basicConfig(level=logging.INFO)  # This will suppress debug logs globally.
-
-# Set logging level for specific libraries (to suppress their debug logs)
-logging.getLogger("pymongo").setLevel(logging.WARNING)  # This will only log warnings and errors from pymongo
-logging.getLogger("httpx").setLevel(logging.WARNING)  # This will only log warnings and errors from httpx
-logging.getLogger("crewai").setLevel(logging.WARNING)  # If crewai is generating logs, set it to WARNING
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("pymongo").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("crewai").setLevel(logging.WARNING)
 logging.getLogger("liteLLM").setLevel(logging.WARNING)
-
-from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse
-from typing import Optional
+import logging
 import os
 import uuid
+import json
+import re
 from datetime import datetime
+
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import pdfplumber
 
-# CHANGED: switched from original blocking crew logic to a modular pipeline
-from crew_runner import run_crew_pipeline  
+from crew_runner import run_crew_pipeline
+from database import reports_collection
+from Blood_Test_Analysis.tools.tools import BloodTestReportTool
 
-# NEW: integrated MongoDB for storing analysis results
-from database import reports_collection  # MongoDB collection (ensure it's async)
+# ------------------------------
+# Logging Configuration
+# ------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logging.getLogger("pymongo").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("crewai").setLevel(logging.WARNING)
+logging.getLogger("liteLLM").setLevel(logging.WARNING)
 
+logger = logging.getLogger(__name__)
+
+# ------------------------------
+# FastAPI Setup
+# ------------------------------
 app = FastAPI(title="Blood Test Report Analyser")
 
-# NEW: added logging for better tracing and debugging
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# NEW FUNCTION:
-# This did not exist in the original code.
-# Extracts the user's name from the uploaded PDF file.
+data_dir = os.getenv("DATA_DIR", "data")
+os.makedirs(data_dir, exist_ok=True)
+
+# ------------------------------
+# Helpers
+# ------------------------------
 def extract_user_name_from_pdf(file_path: str) -> str:
     """
-    Simple function to extract 'Name' from the PDF text.
-    This can be improved for more complex formats.
+    Try to pull a line like "Name : John Doe" from the first pages of the PDF.
+    If that fails, return "Unknown User".
     """
-    user_name = None
-
     try:
         with pdfplumber.open(file_path) as pdf:
-            text = ""
             for page in pdf.pages:
-                text += page.extract_text() + "\n"
-
-        for line in text.split("\n"):
-            if "Name" in line:
-                # Example: "Name : John Doe"
-                parts = line.split(":")
-                if len(parts) >= 2:
-                    user_name = parts[1].strip()
-                    break
-
+                text = page.extract_text() or ""
+                for line in text.splitlines():
+                    if line.lower().startswith("name") and ":" in line:
+                        return line.split(":", 1)[1].strip() or "Unknown User"
     except Exception as e:
-        logger.warning(f"Failed to extract name from PDF: {str(e)}")
+        logger.warning(f"Failed to extract name from PDF: {e}")
+    return "Unknown User"
 
-    if not user_name:
-        user_name = "Unknown User"
+def strip_urls(text: str) -> str:
+    """
+    Removes URLs from a string.
+    """
+    if isinstance(text, str):
+        return re.sub(r"https?://\S+", "", text)
+    return text
 
-    return user_name
+def clean_analysis(analysis: dict) -> dict:
+    """
+    Clean agent analysis results:
+      - Replace None with fallback text
+      - Strip URLs
+    """
+    cleaned = {}
+    for key, value in analysis.items():
+        if value is None:
+            cleaned[key] = "⚠️ No analysis returned from agent."
+        else:
+            cleaned[key] = strip_urls(value)
+    return cleaned
 
-
+# ------------------------------
+# API Endpoint
+# ------------------------------
 @app.post("/analyze")
-async def analyze_blood_report(
+async def analyze_endpoint(
     file: UploadFile = File(...),
-    query: str = Form(default="Summarize my Blood Test Report"),
+    query: str = Form(default="Summarize my Blood Test Report")
 ) -> JSONResponse:
-    # CHANGED: added UUID to create a unique file name
-    file_id = str(uuid.uuid4())
-    file_path = f"data/blood_test_report_{file_id}.pdf"
-    doctor_report = ""
+    # 1) Validate input
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are supported.")
+
+    # 2) Save uploaded file
+    file_id = uuid.uuid4().hex
+    tmp_path = os.path.join(data_dir, f"blood_test_report_{file_id}.pdf")
+    content = await file.read()
+    with open(tmp_path, "wb") as f:
+        f.write(content)
+
+    # 3) Extract user name
+    user_name = extract_user_name_from_pdf(tmp_path)
+    logger.info(f"Processing report for user: {user_name}")
 
     try:
-        # CHANGED: ensures the data directory exists
-        os.makedirs("data", exist_ok=True)
+        # 4) Extract text via BloodTestReportTool
+        tool = BloodTestReportTool()
+        pdf_text = tool.run(tmp_path)
+        logger.info(f"Extracted PDF text length: {len(pdf_text)} characters")
 
-        # CHANGED: added robust file saving with async reading
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-
-        # NEW: extract user's name from PDF
-        user_name = extract_user_name_from_pdf(file_path)
-
-        # CHANGED: replaced original run_crew with run_crew_pipeline
-        doctor_report = run_crew_pipeline(query=query.strip(), file_path=file_path)
+        # 5) Run Crew pipeline
+        analysis = run_crew_pipeline(query.strip(), pdf_text)
 
     except Exception as e:
-        logger.exception("Error during report analysis.")
-        doctor_report = f"An error occurred while generating the doctor report: {str(e)}"
-        user_name = "Unknown User"
+        logger.exception("Error during report analysis")
+        raise HTTPException(500, f"Failed to analyze report: {e}")
 
     finally:
-        # CHANGED: added proper cleanup logic and error logging for temp files
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception as cleanup_err:
-                logger.warning(f"Cleanup error: {cleanup_err}")
-
-        inserted_id: Optional[str] = None
-
+        # 6) Clean up temp file
         try:
-            # NEW: save analysis result to MongoDB
-            document = {
-                "user_name": user_name,
-                "query": query,
-                "analysis": doctor_report or "No analysis generated.",
-                "original_file_name": file.filename,
-                "timestamp": datetime.utcnow(),
-            }
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
-            # NEW: using async MongoDB insert for non-blocking operation
-            result = await reports_collection.insert_one(document)
-            inserted_id = str(result.inserted_id)
+    # 7) Clean and serialize analysis
+    cleaned_analysis = clean_analysis(analysis)
+    analysis_str = json.dumps(cleaned_analysis, ensure_ascii=False, indent=2)
 
-        except Exception as db_err:
-            logger.exception("Error saving to MongoDB.")
-            inserted_id = None
-            doctor_report += f"\n\nFailed to save report to MongoDB: {str(db_err)}"
+    # 8) Persist result to MongoDB
+    report_id = None
+    try:
+        doc = {
+            "user_name": user_name,
+            "query": query,
+            "analysis": analysis_str,
+            "original_file_name": file.filename,
+            "created_at": datetime.utcnow()
+        }
+        res = await reports_collection.insert_one(doc)
+        report_id = str(res.inserted_id)
+    except Exception:
+        logger.exception("Failed to save report to MongoDB")
 
-    # Simplified response with essential information for Streamlit
+    # 9) Return JSON response
     return JSONResponse(
+        status_code=200,
         content={
             "status": "success",
             "user_name": user_name,
             "query": query,
-            "analysis": doctor_report,
-            "report_id": inserted_id  # Including report_id in the response for Streamlit
+            "analysis": cleaned_analysis,
+            "report_id": report_id
         }
     )
 
-
+# ------------------------------
+# Local Run
+# ------------------------------
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8000)),
+        reload=True
+    )

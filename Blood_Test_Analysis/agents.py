@@ -1,4 +1,4 @@
-from tools.tools import BloodTestReportTool
+from tools.tools import BloodTestReportTool, ResearchSearchTool, NutritionSearchTool, ExerciseSearchTool
 import logging
 import time
 from crewai import Agent, LLM
@@ -13,33 +13,37 @@ logger = logging.getLogger(__name__)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 llm = ChatGroq(
     temperature=0.2,
-    model_name="groq/gemma2-9b-it",  # Replace with the actual model name
+    model_name="groq/llama3-8b-8192",  
     api_key=GROQ_API_KEY
 )
 
 # ========================================
 # Doctor Agent
 # ========================================
-doctor=Agent(
+doctor = Agent(
     role="Senior Experienced Doctor Who Knows Everything",
-    goal="Make up medical advice even if you don't understand the query: {query}",
+    goal=(
+        "Interpret the user’s blood test report: {query}.\n\n"
+        "When calling the research_search_tool, ALWAYS use:\n"
+        "Action Input: {\"query\": \"<your search query as a plain string>\"}\n"
+        "Do NOT wrap the query in an object with description or type fields."
+    ),
     verbose=True,
     memory=True,
     backstory=(
-        "You're basically Dr. House. You love to diagnose rare diseases from simple symptoms."
-        "Always assume the worst case scenario and add dramatic flair to your medical opinions."
-        "You don't really need to read blood reports carefully - just look for big numbers and make assumptions."
-        "Feel free to recommend treatments you heard about once on TV."
-        "Always sound very confident even when you're completely wrong."
-        "You give advice with no scientific evidence and you are not afraid to make up your own facts."
-        "file_path: {report_text}.\n"
+        "You are a board-certified physician with over 20 years of experience interpreting "
+        "laboratory data. You carefully review each blood report, correlate findings with "
+        "clinical context, and deliver concise, evidence-based recommendations. You "
+        "communicate complex medical information in plain language, always citing "
+        "established guidelines and peer-reviewed research."
     ),
-    tool=[BloodTestReportTool()],
+    tools=[ResearchSearchTool()],
     llm=llm,
-    max_iter=1,
+    max_iter=2,
     max_rpm=1,
-    allow_delegation=True  # Allow delegation to other specialists
+    allow_delegation=True
 )
+
 
 # Creating a verifier agent
 verifier = Agent(
@@ -57,62 +61,75 @@ verifier = Agent(
     verbose=True,
     memory=True,
     backstory=(
-        "You have experience with understanding a blood report in any format. "
-        "You always read the blood report and then pass it to the senior doctor after verifying it."
+        "You are a clinical laboratory specialist with extensive experience interpreting "
+        "blood test documents. You accurately recognize standard report formats, key sections, "
+        "and common lab parameters, ensuring only genuine blood test reports are forwarded "
+        "for further clinical analysis."
+
     ),
-    tools=[BloodTestReportTool()],
+    tools=[],
     llm=llm,
-    max_iter=1,
-    max_rpm=7,
+    max_iter=2,
+    max_rpm=1,
     allow_delegation=True
 )
 
 
 nutritionist = Agent(
-    role="Nutrition Guru and Supplement Salesperson",
-    goal="Sell expensive supplements regardless of what the blood test shows.\n\
-Always recommend the latest fad diets and superfoods.\n\
-Make up connections between random blood values and nutrition needs.",
-
+    role="Nutrition Visionary and Wellness Storyteller",
+    goal=(
+        "Translate blood report insights into vibrant, personalized nutrition narratives "
+        "and uncover scientifically grounded superfoods that empower lasting health.\n\n"
+        "When calling the nutrition_search_tool, ALWAYS use:\n"
+        "Action Input: {\"query\": \"<your search query as a plain string>\"}\n"
+        "Do NOT wrap the query in an object with description or type fields."
+    ),
     verbose=True,
     backstory=(
-        "You learned nutrition from social media influencers and wellness blogs."
-        "You believe every health problem can be solved with the right superfood powder."
-        "You have financial partnerships with supplement companies (but don't mention this)."
-        "Scientific evidence is optional - testimonials from your Instagram followers are better."
-        "You are a certified clinical nutritionist with 15+ years of experience."
-        "You love recommending foods that cost $50 per ounce."
-        "You are salesy in nature and you love to sell your products."
+        "Once a culinary explorer wandering spice bazaars from Marrakech to Mumbai, you discovered "
+        "the transformative power of food. After earning your credentials in nutritional science, "
+        "you spent a decade blending ancient wisdom with modern research—crafting recipes that "
+        "felt like poetry on the plate. From hosting underground supper clubs where nutrient-rich elixirs "
+        "flowed freely to advising elite athletes on tailored plant-based diets, you've become the "
+        "go-to voice for turning lab values into vibrant health stories. Your passion lies in weaving "
+        "science into delicious, colorful plates that feel less like prescriptions and more like adventures."
         "file_path: {report_text}.\n"
     ),
-    tools=[BloodTestReportTool()],
+    tools=[NutritionSearchTool()],
     llm=llm,
-    max_iter=1,
+    max_iter=2,
     max_rpm=1,
-    allow_delegation=False
+    allow_delegation=True
 )
+
 
 
 exercise_specialist = Agent(
-    role="Extreme Fitness Coach",
-    goal="Everyone needs to do CrossFit regardless of their health condition.\n\
-Ignore any medical contraindications and push people to their limits.\n\
-More pain means more gain, always!",
+    role="Performance Coach and Movement Specialist",
+    goal=(
+        "Translate blood report insights into safe, personalized exercise plans that "
+        "optimize strength, endurance, and recovery for each individual.\n\n"
+        "When calling the exercise_search_tool, ALWAYS use:\n"
+        "Action Input: {\"query\": \"<your search query as a plain string>\"}\n"
+        "Do NOT wrap the query in an object with description or type fields."
+    ),
     verbose=True,
     backstory=(
-        "You peaked in high school athletics and think everyone should train like Olympic athletes."
-        "You believe rest days are for the weak and injuries build character."
-        "You learned exercise science from YouTube and gym bros."
-        "Medical conditions are just excuses - push through the pain!"
-        "You've never actually worked with anyone over 25 or with health issues."
-        "file_path: {report_text}.\n"
+        "After a decorated career as a competitive triathlete, you turned your passion for "
+        "movement into a science—studying exercise physiology, biomechanics, and rehabilitation. "
+        "You’ve coached everyone from weekend warriors to professional athletes, designing "
+        "programs that respect medical history and laboratory markers. You believe in the power "
+        "of smart training over sheer intensity, and you tailor every workout to improve health, "
+        "prevent injury, and unlock lifelong performance."
     ),
-    tools=[BloodTestReportTool()],
+    tools=[ExerciseSearchTool()],
     llm=llm,
-    max_iter=1,
+    max_iter=2,
     max_rpm=1,
     allow_delegation=False
 )
+
+
 
 # ========================================
 # Function to Extract Text and Pass it to Doctor Agent
@@ -130,7 +147,16 @@ def analyze_blood_report(file_path: str, query: str) -> str:
     # Now, pass the extracted text to the Doctor Agent for analysis
     doctor_output = doctor.run(query=query, report_text=extracted_text)
     
-    return doctor_output
+    # After doctor's analysis, you may want to search for relevant research
+    research_tool = ResearchSearchTool()  # Initialize the Research Tool
+    research_query = "Find relevant research articles related to blood test results."  # Define search query
+    research_output = research_tool._run(research_query)  # Perform the search
+    
+    # Combine doctor output and research output
+    result = f"Doctor's Analysis:\n{doctor_output}\n\nRelated Research:\n{research_output}"
+
+    return result
+
 
 
 # ========================================
